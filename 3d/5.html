@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Canvas Image Warp (Using Source & Destination Patterns)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            margin: 10px auto;
+            border: 1px solid #ccc;
+        }
+        input {
+            display: block;
+            margin: 10px auto;
+        }
+        .file-group {
+            text-align: center;
+            margin: 10px;
+        }
+        .wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .canvas-container {
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Inputs for images -->
+    <div class="file-group">
+        <label>
+            Source Pattern:
+            <input type="file" id="sourcePatternInput" accept="image/png,image/jpeg"/>
+        </label>
+    </div>
+    <div class="file-group">
+        <label>
+            Destination Pattern:
+            <input type="file" id="destPatternInput" accept="image/png,image/jpeg"/>
+        </label>
+    </div>
+    <div class="file-group">
+        <label>
+            Image to Distort:
+            <input type="file" id="distortedImageInput" accept="image/png,image/jpeg"/>
+        </label>
+    </div>
+
+    <!-- Canvases -->
+    <div class="wrapper">
+        <div class="canvas-container">
+            <h3 style="text-align:center;">Source Pattern</h3>
+            <canvas id="sourceCanvas" width="512" height="512"></canvas>
+        </div>
+        <div class="canvas-container">
+            <h3 style="text-align:center;">Destination Pattern</h3>
+            <canvas id="destCanvas" width="512" height="512"></canvas>
+        </div>
+        <div class="canvas-container">
+            <h3 style="text-align:center;">Image to Distort</h3>
+            <canvas id="distortCanvas" width="512" height="512"></canvas>
+        </div>
+        <div class="canvas-container">
+            <h3 style="text-align:center;">Generated Pattern (Viewing Only)</h3>
+            <canvas id="patternCanvas" width="512" height="512"></canvas>
+        </div>
+        <div class="canvas-container">
+            <h3 style="text-align:center;">Result</h3>
+            <canvas id="resultCanvas" width="512" height="512"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Grab all canvas elements
+        const sourceCanvas   = document.getElementById('sourceCanvas');
+        const destCanvas     = document.getElementById('destCanvas');
+        const distortCanvas  = document.getElementById('distortCanvas');
+        const patternCanvas  = document.getElementById('patternCanvas');
+        const resultCanvas   = document.getElementById('resultCanvas');
+
+        // Corresponding 2D contexts
+        const sourceCtx   = sourceCanvas.getContext('2d');
+        const destCtx     = destCanvas.getContext('2d');
+        const distortCtx  = distortCanvas.getContext('2d');
+        const patternCtx  = patternCanvas.getContext('2d');
+        const resultCtx   = resultCanvas.getContext('2d');
+
+        // Map: "R,G,B" => [R, G, B, A]
+        let colorMap = {};
+
+        // Track if images are loaded
+        let sourceLoaded   = false;
+        let destLoaded     = false;
+        let distortedLoaded= false;
+
+        // Attach event listeners to file inputs
+        document.getElementById('sourcePatternInput').addEventListener('change', handleSourcePattern);
+        document.getElementById('destPatternInput').addEventListener('change', handleDestPattern);
+        document.getElementById('distortedImageInput').addEventListener('change', handleDistortedImage);
+
+        // --------------------------------------------------
+        // 1) Loading the Source Pattern
+        // --------------------------------------------------
+        function handleSourcePattern(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const img = new Image();
+            img.onload = () => {
+                sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+                sourceCtx.drawImage(img, 0, 0, sourceCanvas.width, sourceCanvas.height);
+                sourceLoaded = true;
+                tryMappingIfAllLoaded();
+            };
+            img.src = URL.createObjectURL(file);
+        }
+
+        // --------------------------------------------------
+        // 2) Loading the Destination Pattern
+        // --------------------------------------------------
+        function handleDestPattern(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const img = new Image();
+            img.onload = () => {
+                destCtx.clearRect(0, 0, destCanvas.width, destCanvas.height);
+                destCtx.drawImage(img, 0, 0, destCanvas.width, destCanvas.height);
+                destLoaded = true;
+                tryMappingIfAllLoaded();
+            };
+            img.src = URL.createObjectURL(file);
+        }
+
+        // --------------------------------------------------
+        // 3) Loading the Image to Distort
+        // --------------------------------------------------
+        function handleDistortedImage(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const img = new Image();
+            img.onload = () => {
+                distortCtx.clearRect(0, 0, distortCanvas.width, distortCanvas.height);
+                distortCtx.drawImage(img, 0, 0, distortCanvas.width, distortCanvas.height);
+                distortedLoaded = true;
+                tryMappingIfAllLoaded();
+            };
+            img.src = URL.createObjectURL(file);
+        }
+
+        // --------------------------------------------------
+        // Once all 3 images are loaded, we can build colorMap
+        // and apply the distortion
+        // --------------------------------------------------
+        function tryMappingIfAllLoaded() {
+            if (sourceLoaded && destLoaded && distortedLoaded) {
+                buildColorMap();
+                applyDistortion();
+            }
+        }
+
+        // --------------------------------------------------
+        // Build colorMap by scanning Source Pattern
+        // colorMap[sourceColorKey] = color from distorted image
+        // at the same pixel (x, y).
+        // --------------------------------------------------
+        function buildColorMap() {
+            // Clear the previous map if any
+            colorMap = {};
+
+            // Get pixel data from source pattern & distorted image
+            const srcData = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+            const distData= distortCtx.getImageData(0, 0, distortCanvas.width, distortCanvas.height);
+
+            // For each pixel (x, y), store map from source pattern color -> distorted image color
+            for (let i = 0; i < srcData.data.length; i += 4) {
+                const r = srcData.data[i];
+                const g = srcData.data[i + 1];
+                const b = srcData.data[i + 2];
+                // alpha channel: i + 3
+
+                // Key by "r,g,b"
+                const key = `${r},${g},${b}`;
+
+                // Distorted image color for the same pixel
+                const dr = distData.data[i];
+                const dg = distData.data[i + 1];
+                const db = distData.data[i + 2];
+                const da = distData.data[i + 3];
+
+                colorMap[key] = [dr, dg, db, da];
+            }
+        }
+
+        // --------------------------------------------------
+        // Apply Distortion:
+        // For each pixel in DEST Pattern, check colorMap
+        // for that color, and paint the mapped color into result.
+        // --------------------------------------------------
+        function applyDistortion() {
+            const destData   = destCtx.getImageData(0, 0, destCanvas.width, destCanvas.height);
+            const resultData = resultCtx.createImageData(destCanvas.width, destCanvas.height);
+
+            for (let i = 0; i < destData.data.length; i += 4) {
+                const r = destData.data[i];
+                const g = destData.data[i + 1];
+                const b = destData.data[i + 2];
+                // alpha: i + 3
+
+                const key = `${r},${g},${b}`;
+                const mappedColor = colorMap[key];
+
+                if (mappedColor) {
+                    resultData.data[i + 0] = mappedColor[0];
+                    resultData.data[i + 1] = mappedColor[1];
+                    resultData.data[i + 2] = mappedColor[2];
+                    resultData.data[i + 3] = mappedColor[3];
+                } else {
+                    // If we don't find a match, you can choose to do nothing
+                    // or set the pixel to transparent or some default color:
+                    resultData.data[i + 0] = 0;   // R
+                    resultData.data[i + 1] = 0;   // G
+                    resultData.data[i + 2] = 0;   // B
+                    resultData.data[i + 3] = 0;   // A (fully transparent)
+                }
+            }
+
+            // Draw result
+            resultCtx.putImageData(resultData, 0, 0);
+        }
+
+        // --------------------------------------------------
+        // (Optional) Generate HSL pattern for Viewing Only
+        // This is purely for reference/visualization
+        // --------------------------------------------------
+        function createHSLPattern() {
+            const width  = patternCanvas.width;
+            const height = patternCanvas.height;
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    // For example, hue depends on x, lightness depends on y
+                    const hue = (x / width) * 360;     
+                    const lightness = (y / height) * 100;
+                    patternCtx.fillStyle = `hsl(${hue}, 100%, ${lightness}%)`;
+                    patternCtx.fillRect(x, y, 1, 1);
+                }
+            }
+        }
+
+        // Generate the pattern once the page loads
+        createHSLPattern();
+    </script>
+</body>
+</html>
+
